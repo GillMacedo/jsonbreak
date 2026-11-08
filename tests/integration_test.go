@@ -443,3 +443,76 @@ func TestBaseGitRef(t *testing.T) {
 		t.Errorf("--base outside git: exit %d stdout %q", r.code, r.stdout)
 	}
 }
+
+func TestIgnoreFile(t *testing.T) {
+	ignoreDir := t.TempDir()
+	ignoreContent := `# Accepted breaks between v1 and v2
+api.Customer email key-removed email moved to separate user service
+api.Item sku key-removed sku replaced by item ID
+api.Order customer_id key-renamed renamed to customerId for camelCase consistency
+api.Order quantity string-option quantity encoded as quoted number
+api.Order shipping.days type-changed shipping days represented as duration string
+`
+	ignorePath := filepath.Join(ignoreDir, ".jsonbreak-ignore")
+	if err := os.WriteFile(ignorePath, []byte(ignoreContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Matching lines: exit 0 when all breaking changes are accepted, printed as ACCEPTED
+	r := runTool(t, "--old", example(t, "orders-v1"), "--new", example(t, "orders-v2"), "--ignore", ignorePath)
+	if r.code != 0 {
+		t.Fatalf("matching ignore lines: exit %d, want 0\nstdout:\n%s\nstderr:\n%s", r.code, r.stdout, r.stderr)
+	}
+	if !strings.Contains(r.stdout, "ACCEPTED api.Order customer_id") {
+		t.Errorf("stdout missing ACCEPTED api.Order customer_id:\n%s", r.stdout)
+	}
+	if !strings.Contains(r.stdout, "accepted: renamed to customerId for camelCase consistency") {
+		t.Errorf("stdout missing accepted reason:\n%s", r.stdout)
+	}
+	if !strings.Contains(r.stdout, "5 accepted") {
+		t.Errorf("stdout missing accepted count in summary:\n%s", r.stdout)
+	}
+
+	// Test default .jsonbreak-ignore located in the new module directory
+	v2WithIgnore := copyDir(t, example(t, "orders-v2"))
+	if err := os.WriteFile(filepath.Join(v2WithIgnore, ".jsonbreak-ignore"), []byte(ignoreContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rDefault := runTool(t, "--old", example(t, "orders-v1"), "--new", v2WithIgnore)
+	if rDefault.code != 0 {
+		t.Fatalf("default .jsonbreak-ignore: exit %d, want 0\nstdout:\n%s\nstderr:\n%s", rDefault.code, rDefault.stdout, rDefault.stderr)
+	}
+	if !strings.Contains(rDefault.stdout, "ACCEPTED api.Order customer_id") {
+		t.Errorf("default ignore: stdout missing ACCEPTED:\n%s", rDefault.stdout)
+	}
+
+	// 2. Stale line: unknown or stale line is reported so file doesn't rot
+	staleContent := ignoreContent + "api.NonExistent old_key key-removed stale rule that should be reported\n"
+	stalePath := filepath.Join(ignoreDir, "stale-ignore")
+	if err := os.WriteFile(stalePath, []byte(staleContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rStale := runTool(t, "--old", example(t, "orders-v1"), "--new", example(t, "orders-v2"), "--ignore", stalePath)
+	if rStale.code != 0 {
+		t.Fatalf("stale ignore: exit %d, want 0\nstdout:\n%s\nstderr:\n%s", rStale.code, rStale.stdout, rStale.stderr)
+	}
+	if !strings.Contains(rStale.stdout, "stale ignore: api.NonExistent old_key key-removed") {
+		t.Errorf("stdout missing stale ignore report:\n%s", rStale.stdout)
+	}
+
+	// 3. Garbage file must exit 2 and print nothing on stdout
+	garbagePath := filepath.Join(ignoreDir, "garbage-ignore")
+	if err := os.WriteFile(garbagePath, []byte("invalid line without required columns\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rGarbage := runTool(t, "--old", example(t, "orders-v1"), "--new", example(t, "orders-v2"), "--ignore", garbagePath)
+	if rGarbage.code != 2 {
+		t.Fatalf("garbage ignore: exit %d, want 2\nstdout:\n%s\nstderr:\n%s", rGarbage.code, rGarbage.stdout, rGarbage.stderr)
+	}
+	if rGarbage.stdout != "" {
+		t.Errorf("garbage ignore stdout = %q, want empty", rGarbage.stdout)
+	}
+	if !strings.Contains(rGarbage.stderr, "invalid ignore file") {
+		t.Errorf("garbage ignore stderr missing error message: %q", rGarbage.stderr)
+	}
+}
