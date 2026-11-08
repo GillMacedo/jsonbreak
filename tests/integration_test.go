@@ -126,11 +126,12 @@ func writeModule(t *testing.T, files map[string]string) string {
 type report struct {
 	Compared int `json:"types_compared"`
 	Findings []struct {
-		Severity string `json:"severity"`
-		Type     string `json:"type"`
-		Key      string `json:"key"`
-		Change   string `json:"change"`
-		Message  string `json:"message"`
+		Severity string   `json:"severity"`
+		Type     string   `json:"type"`
+		Key      string   `json:"key"`
+		Change   string   `json:"change"`
+		Message  string   `json:"message"`
+		SeenIn   []string `json:"seen_in,omitempty"`
 	} `json:"findings"`
 	Breaks   int `json:"breaks"`
 	Warnings int `json:"warnings"`
@@ -174,6 +175,19 @@ func TestExampleBreaks(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("findings:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	rep := jsonReport(t, r)
+	for _, f := range rep.Findings {
+		switch f.Type + " " + f.Key {
+		case "api.Item sku", "api.Item price":
+			if strings.Join(f.SeenIn, ", ") != "api.Order items[]" {
+				t.Errorf("%s %s seen_in = %v, want [api.Order items[]]", f.Type, f.Key, f.SeenIn)
+			}
+		case "api.Meta created_at":
+			if strings.Join(f.SeenIn, ", ") != "api.Customer, api.Order" {
+				t.Errorf("%s %s seen_in = %v, want [api.Customer, api.Order]", f.Type, f.Key, f.SeenIn)
+			}
+		}
 	}
 	for _, failOn := range []string{"never"} {
 		r := runTool(t, "--old", example(t, "orders-v1"), "--new", example(t, "orders-v2"), "--fail-on", failOn)

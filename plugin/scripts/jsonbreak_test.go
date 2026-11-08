@@ -110,3 +110,22 @@ func TestVersion(t *testing.T) {
 		t.Errorf("--version: %d %q", code, out.String())
 	}
 }
+
+func TestNestedSeenIn(t *testing.T) {
+	cases := []struct {
+		seenIn, key, want string
+	}{
+		{"", "items[]", ""},
+		{"api.Order", "", "api.Order"},
+		{"api.Order", "items[]", "api.Order items[]"},
+		{"api.Order", "item", "api.Order item"},
+		{"api.Order", "shipping.warehouse", "api.Order shipping.warehouse"},
+		{"api.Order items[]", "sku", "api.Order items[].sku"},
+		{"api.Order items[]", "details[]", "api.Order items[].details[]"},
+	}
+	for _, c := range cases {
+		if got := nestedSeenIn(c.seenIn, c.key); got != c.want {
+			t.Errorf("nestedSeenIn(%q, %q) = %q, want %q", c.seenIn, c.key, got, c.want)
+		}
+	}
+}

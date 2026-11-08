@@ -883,12 +883,18 @@ type Report struct {
 	Infos    int       `json:"infos"`
 }
 
+type typeRef struct {
+	target string
+	key    string
+}
+
 type comparer struct {
 	old, new *side
 	rep      *Report
 	done     map[[2]*types.Struct]bool
 	seen     map[string]int // finding dedupe key -> index
 	opaque   map[string]bool
+	typeRefs map[string][]typeRef
 	keys     int
 }
 
@@ -915,6 +921,7 @@ func (c *comparer) add(f Finding, seenIn string) {
 	if i, ok := c.seen[k]; ok {
 		if seenIn != "" && seenIn != c.rep.Findings[i].Type && !contains(c.rep.Findings[i].SeenIn, seenIn) {
 			c.rep.Findings[i].SeenIn = append(c.rep.Findings[i].SeenIn, seenIn)
+			sort.Strings(c.rep.Findings[i].SeenIn)
 		}
 		return
 	}
@@ -923,6 +930,36 @@ func (c *comparer) add(f Finding, seenIn string) {
 	}
 	c.seen[k] = len(c.rep.Findings)
 	c.rep.Findings = append(c.rep.Findings, f)
+}
+
+func nestedSeenIn(seenIn, key string) string {
+	if seenIn == "" {
+		return ""
+	}
+	if key == "" {
+		return seenIn
+	}
+	if !strings.Contains(seenIn, " ") {
+		return seenIn + " " + key
+	}
+	return seenIn + "." + key
+}
+
+func (c *comparer) recordSeenIn(where, seenIn string, visited map[string]bool) {
+	if seenIn == "" || seenIn == where || visited[where] {
+		return
+	}
+	visited[where] = true
+	for i := range c.rep.Findings {
+		if c.rep.Findings[i].Type == where && !contains(c.rep.Findings[i].SeenIn, seenIn) {
+			c.rep.Findings[i].SeenIn = append(c.rep.Findings[i].SeenIn, seenIn)
+			sort.Strings(c.rep.Findings[i].SeenIn)
+		}
+	}
+	for _, ref := range c.typeRefs[where] {
+		childSeenIn := nestedSeenIn(seenIn, ref.key)
+		c.recordSeenIn(ref.target, childSeenIn, visited)
+	}
 }
 
 func contains(s []string, v string) bool {
@@ -1036,7 +1073,7 @@ func compareSides(oldS, newS *side, o options) (*Report, error) {
 	if common == 0 {
 		return nil, distrust("no JSON type exists on both sides (old module %s, new module %s); are these revisions of the same module?", oldS.modPath, newS.modPath)
 	}
-	c := &comparer{old: oldS, new: newS, rep: rep, done: map[[2]*types.Struct]bool{}, seen: map[string]int{}, opaque: map[string]bool{}}
+	c := &comparer{old: oldS, new: newS, rep: rep, done: map[[2]*types.Struct]bool{}, seen: map[string]int{}, opaque: map[string]bool{}, typeRefs: map[string][]typeRef{}}
 	if oldS.modPath != newS.modPath {
 		c.add(Finding{Severity: sevInfo, Type: "module", Change: "module-path",
 			Message: fmt.Sprintf("module path changed from %s to %s; types were matched by their path inside the module", oldS.modPath, newS.modPath)}, "")
@@ -1077,6 +1114,9 @@ func compareSides(oldS, newS *side, o options) (*Report, error) {
 			Pos: c.posOf(newS, newR[id].named.Obj().Pos())}, "")
 	}
 	rep.Keys = c.keys
+	for i := range rep.Findings {
+		sort.Strings(rep.Findings[i].SeenIn)
+	}
 	for k := range c.opaque {
 		rep.Opaque = append(rep.Opaque, k)
 	}
@@ -1135,6 +1175,9 @@ func ownerOf(f jfield, fallback string, s *side) string {
 func (c *comparer) compareStruct(where, prefix string, os_, ns *types.Struct, seenIn string) {
 	pair := [2]*types.Struct{os_, ns}
 	if c.done[pair] && prefix == "" {
+		if seenIn != "" && seenIn != where {
+			c.recordSeenIn(where, seenIn, map[string]bool{})
+		}
 		return
 	}
 	c.done[pair] = true
@@ -1360,7 +1403,10 @@ func (c *comparer) compareTypes(owner, key string, ot, nt types.Type, pos, seenI
 			if oid := c.typeID(os_.named, c.old); oid != where {
 				where = oid + " (now " + where + ")"
 			}
-			c.compareStruct(where, "", os_.st, ns.st, seenIn)
+			seenPath := nestedSeenIn(seenIn, key)
+			c.typeRefs[owner] = append(c.typeRefs[owner], typeRef{target: where, key: key})
+			c.compareStruct(where, "", os_.st, ns.st, seenPath)
+			c.recordSeenIn(where, seenPath, map[string]bool{})
 			return
 		}
 		c.compareStruct(owner, key+".", os_.st, ns.st, seenIn)
