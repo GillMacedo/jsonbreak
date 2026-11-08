@@ -102,7 +102,7 @@ To see what a type looks like on the wire:
 ## Usage
 
     jsonbreak (--old DIR | --base GITREF) [--new DIR] [--pkg PATTERN]... [--type NAME]... [--all]
-              [--tags T,...] [--format text|json] [--fail-on break|warn|never]
+              [--tags T,...] [--format text|json] [--fail-on break|warn|never] [--ignore FILE]
     jsonbreak --keys [--new DIR] [--pkg PATTERN]... [--type NAME]... [--all]
 
 1. **Load both sides.** In each module directory it runs `go list -e -export -deps -json` (default pattern `./...`), which compiles the packages without linking or running them, and reads the compiler's type information. `--base REF` takes the old side from git with `git archive`, so the new side is your work tree, uncommitted changes included. `--new` defaults to the current directory.
@@ -111,6 +111,7 @@ To see what a type looks like on the wire:
 
 - **`--format json`** prints the same report for scripts and agents, with `severity`, `type`, `key`, `change`, `message`, `pos` and `seen_in` per finding.
 - **`--fail-on`** sets the lowest severity that exits 1: `break` by default, `warn`, or `never`.
+- **`--ignore FILE`** reads accepted findings (one per line: `type`, `key`, `change`, and a reason) from `FILE` or `.jsonbreak-ignore`, leaving them out of the exit code while still printing them as accepted. Unknown or stale lines are reported.
 - **`--keys`** prints the keys of each JSON type in one module, with omitempty, nullable and custom encoders marked.
 - **`--tags`** passes build tags to `go list`. Other settings such as `GOFLAGS` and `GOWORK` come from the environment.
 

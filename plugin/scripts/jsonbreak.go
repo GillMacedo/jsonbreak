@@ -71,6 +71,7 @@ type options struct {
 	failOn         string
 	includeTypes   []string
 	keys           bool
+	ignoreFile     string
 }
 
 type stringList []string
@@ -96,12 +97,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&o.all, "all", false, "compare every exported struct type, not only those with json tags")
 	fs.StringVar(&o.format, "format", "text", "output format: text or json")
 	fs.StringVar(&o.failOn, "fail-on", "break", "lowest severity that exits 1: break, warn or never")
+	fs.StringVar(&o.ignoreFile, "ignore", "", "path to ignore file (default: .jsonbreak-ignore)")
 	fs.BoolVar(&o.keys, "keys", false, "print the JSON keys of each type in --new (or the current directory) and exit")
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: jsonbreak (--old DIR | --base GITREF) [--new DIR] [--pkg PATTERN]... [--type NAME]... [--all]\n")
 		fmt.Fprintf(stderr, "       jsonbreak --keys [--new DIR] [--pkg PATTERN]... [--type NAME]... [--all]\n")
-		fmt.Fprintf(stderr, "                 [--tags T,...] [--format text|json] [--fail-on break|warn|never]\n\n")
+		fmt.Fprintf(stderr, "                 [--tags T,...] [--format text|json] [--fail-on break|warn|never] [--ignore FILE]\n\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -155,6 +157,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 2
 	}
+	ignorePath := o.ignoreFile
+	if ignorePath == "" {
+		candidate := filepath.Join(o.newDir, ".jsonbreak-ignore")
+		if _, err := os.Stat(candidate); err == nil {
+			ignorePath = candidate
+		} else if _, err := os.Stat(".jsonbreak-ignore"); err == nil {
+			ignorePath = ".jsonbreak-ignore"
+		}
+	} else {
+		if _, err := os.Stat(ignorePath); err != nil {
+			fmt.Fprintf(stderr, "jsonbreak: %v\n", err)
+			return 2
+		}
+	}
+	if ignorePath != "" {
+		rules, err := parseIgnoreFile(ignorePath)
+		if err != nil {
+			fmt.Fprintf(stderr, "jsonbreak: %v\n", err)
+			return 2
+		}
+		applyIgnores(rep, rules)
+	}
 	if o.format == "json" {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
@@ -169,6 +193,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	for _, f := range rep.Findings {
+		if f.Accepted {
+			continue
+		}
 		if sevRank(f.Severity) >= sevRank(o.failOn) {
 			return 1
 		}
@@ -864,23 +891,27 @@ type Finding struct {
 	Message  string   `json:"message"`
 	Pos      string   `json:"pos,omitempty"`
 	SeenIn   []string `json:"seen_in,omitempty"`
+	Accepted bool     `json:"accepted,omitempty"`
+	Reason   string   `json:"reason,omitempty"`
 }
 
 type Report struct {
-	Tool     string    `json:"tool"`
-	Version  string    `json:"version"`
-	Old      string    `json:"old"`
-	New      string    `json:"new"`
-	Module   string    `json:"module"`
-	TypesOld int       `json:"json_types_old"`
-	TypesNew int       `json:"json_types_new"`
-	Compared int       `json:"types_compared"`
-	Keys     int       `json:"keys_compared"`
-	Opaque   []string  `json:"custom_encoders_not_checked,omitempty"`
-	Findings []Finding `json:"findings"`
-	Breaks   int       `json:"breaks"`
-	Warnings int       `json:"warnings"`
-	Infos    int       `json:"infos"`
+	Tool         string    `json:"tool"`
+	Version      string    `json:"version"`
+	Old          string    `json:"old"`
+	New          string    `json:"new"`
+	Module       string    `json:"module"`
+	TypesOld     int       `json:"json_types_old"`
+	TypesNew     int       `json:"json_types_new"`
+	Compared     int       `json:"types_compared"`
+	Keys         int       `json:"keys_compared"`
+	Opaque       []string  `json:"custom_encoders_not_checked,omitempty"`
+	Findings     []Finding `json:"findings"`
+	Breaks       int       `json:"breaks"`
+	Warnings     int       `json:"warnings"`
+	Infos        int       `json:"infos"`
+	Accepted     int       `json:"accepted,omitempty"`
+	StaleIgnores []string  `json:"stale_ignores,omitempty"`
 }
 
 type comparer struct {
@@ -1426,6 +1457,116 @@ func listKeys(o options, w io.Writer) error {
 }
 
 // ---------------------------------------------------------------------------
+// Ignore file handling.
+
+var knownChanges = map[string]bool{
+	"key-removed":      true,
+	"key-renamed":      true,
+	"type-changed":     true,
+	"string-option":    true,
+	"map-key-changed":  true,
+	"type-removed":     true,
+	"omitempty-added":  true,
+	"omitzero-added":   true,
+	"now-nullable":     true,
+	"type-narrowed":    true,
+	"type-widened":     true,
+	"custom-encoding":  true,
+	"encoding-changed": true,
+	"invalid-tag":      true,
+	"key-added":        true,
+	"type-added":       true,
+	"module-path":      true,
+}
+
+type ignoreRule struct {
+	lineNum int
+	typ     string
+	key     string
+	change  string
+	reason  string
+	used    bool
+}
+
+func parseIgnoreFile(path string) ([]ignoreRule, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, distrust("%s: %v", path, err)
+	}
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
+	lines := strings.Split(string(data), "\n")
+	var rules []ignoreRule
+	for i, rawLine := range lines {
+		lineNum := i + 1
+		line := strings.TrimRight(rawLine, "\r")
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			return nil, distrust("invalid ignore file %s: line %d: expected <type> <key> <change> <reason>", path, lineNum)
+		}
+		var rule ignoreRule
+		rule.lineNum = lineNum
+		if len(fields) >= 3 && knownChanges[fields[1]] && (fields[1] == "type-removed" || fields[1] == "type-added" || fields[1] == "module-path") {
+			rule.typ = fields[0]
+			rule.key = ""
+			rule.change = fields[1]
+			rule.reason = strings.TrimSpace(strings.Join(fields[2:], " "))
+		} else if len(fields) >= 4 {
+			rule.typ = fields[0]
+			rule.key = fields[1]
+			if rule.key == "-" {
+				rule.key = ""
+			}
+			rule.change = fields[2]
+			rule.reason = strings.TrimSpace(strings.Join(fields[3:], " "))
+		} else {
+			return nil, distrust("invalid ignore file %s: line %d: expected <type> <key> <change> <reason>", path, lineNum)
+		}
+		if rule.typ == "" || rule.change == "" || rule.reason == "" {
+			return nil, distrust("invalid ignore file %s: line %d: missing required fields", path, lineNum)
+		}
+		if !knownChanges[rule.change] {
+			return nil, distrust("invalid ignore file %s: line %d: unknown change type %q", path, lineNum, rule.change)
+		}
+		rules = append(rules, rule)
+	}
+	return rules, nil
+}
+
+func applyIgnores(rep *Report, rules []ignoreRule) {
+	for i := range rep.Findings {
+		f := &rep.Findings[i]
+		for j := range rules {
+			r := &rules[j]
+			if r.used {
+				continue
+			}
+			if r.typ == f.Type && r.change == f.Change {
+				if r.key == f.Key || (r.key == "" && f.Key == "") {
+					f.Accepted = true
+					f.Reason = r.reason
+					r.used = true
+					rep.Accepted++
+					break
+				}
+			}
+		}
+	}
+	for _, r := range rules {
+		if !r.used {
+			keyStr := r.key
+			if keyStr == "" {
+				keyStr = "-"
+			}
+			rep.StaleIgnores = append(rep.StaleIgnores, fmt.Sprintf("%s %s %s", r.typ, keyStr, r.change))
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Output.
 
 func printText(w io.Writer, r *Report) {
@@ -1436,14 +1577,23 @@ func printText(w io.Writer, r *Report) {
 		if f.Key != "" {
 			target += " " + f.Key
 		}
+		if f.Accepted {
+			label = "ACCEPTED"
+		}
 		fmt.Fprintf(w, "  %-5s %s\n", label, target)
 		fmt.Fprintf(w, "        %s\n", f.Message)
+		if f.Accepted && f.Reason != "" {
+			fmt.Fprintf(w, "        accepted: %s\n", f.Reason)
+		}
 		if f.Pos != "" {
 			fmt.Fprintf(w, "        at %s\n", f.Pos)
 		}
 		if len(f.SeenIn) > 0 {
 			fmt.Fprintf(w, "        reached from %s\n", strings.Join(f.SeenIn, ", "))
 		}
+	}
+	for _, st := range r.StaleIgnores {
+		fmt.Fprintf(w, "  stale ignore: %s\n", st)
 	}
 	if len(r.Opaque) > 0 {
 		fmt.Fprintf(w, "  not checked: values with custom JSON methods: %s\n", strings.Join(r.Opaque, ", "))
@@ -1453,10 +1603,17 @@ func printText(w io.Writer, r *Report) {
 		if r.Infos > 0 {
 			fmt.Fprintf(w, " (%s)", plural(r.Infos, "addition"))
 		}
+		if r.Accepted > 0 {
+			fmt.Fprintf(w, " (%d accepted)", r.Accepted)
+		}
 		fmt.Fprintln(w)
 		return
 	}
-	fmt.Fprintf(w, "  %d breaking, %s, %s\n", r.Breaks, plural(r.Warnings, "warning"), plural(r.Infos, "addition"))
+	fmt.Fprintf(w, "  %d breaking", r.Breaks)
+	if r.Accepted > 0 {
+		fmt.Fprintf(w, " (%d accepted)", r.Accepted)
+	}
+	fmt.Fprintf(w, ", %s, %s\n", plural(r.Warnings, "warning"), plural(r.Infos, "addition"))
 }
 
 func plural(n int, word string) string {
