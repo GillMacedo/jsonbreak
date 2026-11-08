@@ -1,0 +1,26 @@
+name: jsonbreak
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check-json-breaks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Run jsonbreak
+        run: |
+          MERGE_BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          go run github.com/GillMacedo/jsonbreak/plugin/scripts@v0.1.0 --base "$MERGE_BASE"

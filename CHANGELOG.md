@@ -4,6 +4,9 @@ All notable changes are documented here, in [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+### Added
+- Example GitHub Actions workflow (`examples/github-actions/jsonbreak.yml`) running jsonbreak against the pull request's merge base (#2).
+
 ## [0.1.0] - 2026-11-08
 
 ### Added
