@@ -36,6 +36,7 @@ Or run it directly with Go 1.22 or newer. It has no dependencies:
       BREAK api.Item sku
             key "sku" removed (field SKU)
             at api/order.go:35
+            reached from api.Order items[]
       BREAK api.Order customer_id
             key "customer_id" renamed to "customerId" (field CustomerID)
             at api/order.go:19
@@ -48,6 +49,7 @@ Or run it directly with Go 1.22 or newer. It has no dependencies:
       WARN  api.Item price
             was number, now encoded by MarshalJSON on money.Cents; the new shape can't be checked
             at api/order.go:37
+            reached from api.Order items[]
       WARN  api.Meta created_at
             can now be null (time.Time became *time.Time)
             at api/order.go:13
