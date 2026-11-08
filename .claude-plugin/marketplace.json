@@ -1,0 +1,14 @@
+{
+  "name": "jsonbreak-marketplace",
+  "description": "Marketplace for jsonbreak, which finds JSON wire-format breaks in Go structs between two revisions.",
+  "owner": {
+    "name": "Giulliano Macedo"
+  },
+  "plugins": [
+    {
+      "name": "jsonbreak",
+      "source": "./plugin",
+      "description": "Compare the JSON that Go structs produce at two revisions and report renamed or removed keys, changed types, and new omitempty or nullable fields."
+    }
+  ]
+}

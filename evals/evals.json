@@ -1,0 +1,27 @@
+[
+  {
+    "skills": ["checking-json-wire-compatibility"],
+    "query": "Does this PR break the JSON our Go API returns?",
+    "expected_behavior": [
+      "Finds the merge base with git merge-base and runs jsonbreak with --base and the module directory",
+      "Lists each BREAK with type, key and file line, and says which readers it affects",
+      "Treats exit code 2 as unknown and shows the error instead of calling it a pass"
+    ]
+  },
+  {
+    "skills": ["checking-json-wire-compatibility"],
+    "query": "I renamed a bunch of struct fields in our event package. Did any json keys change?",
+    "expected_behavior": [
+      "Runs jsonbreak against the last commit or merge base with --pkg set to the event package",
+      "Says that Go field renames that keep the json tag are not reported, and lists only the keys that changed"
+    ]
+  },
+  {
+    "skills": ["checking-json-wire-compatibility"],
+    "query": "We are about to tag v2.4.0 of our Go client. Is the wire format still compatible with v2.3.0?",
+    "expected_behavior": [
+      "Runs jsonbreak with --base v2.3.0",
+      "Mentions the types it could not check because of custom MarshalJSON or UnmarshalJSON methods, and any removed types that may have been renamed"
+    ]
+  }
+]
