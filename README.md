@@ -24,6 +24,10 @@ Or run it directly with Go 1.22 or newer. It has no dependencies:
 
     go run github.com/GillMacedo/jsonbreak/plugin/scripts@latest --base main
 
+In GitHub Actions (CI):
+
+See [examples/github-actions/jsonbreak.yml](examples/github-actions/jsonbreak.yml) for an example workflow that checks pull requests against their merge base with the target branch.
+
 ## Example
 
 `examples/orders-v1` is a made-up order service API. `examples/orders-v2` is the next revision, with changes that all compile:
