@@ -1,6 +1,6 @@
 {
   "name": "jsonbreak",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Find JSON wire-format breaks in Go structs between two revisions: renamed or removed json keys, changed value types, new omitempty, ,string or nullable fields, and custom encoders. Go's API checkers ignore struct tags, so these pass review and CI.",
   "author": {
     "name": "Giulliano Macedo",

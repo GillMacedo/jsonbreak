@@ -4,6 +4,11 @@ All notable changes are documented here, in [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-14
+
+### Added
+- Add --strict-readers flag to report key-added as warning (#3) (#8)
+
 ## [0.1.0] - 2026-11-08
 
 ### Added
