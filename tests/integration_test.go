@@ -134,6 +134,7 @@ type report struct {
 	} `json:"findings"`
 	Breaks   int `json:"breaks"`
 	Warnings int `json:"warnings"`
+	Infos    int `json:"infos"`
 }
 
 func jsonReport(t *testing.T, r result) report {
@@ -441,5 +442,48 @@ func TestBaseGitRef(t *testing.T) {
 	notRepo := copyDir(t, example(t, "orders-v1"))
 	if r := runIn(t, notRepo, []string{"GIT_CEILING_DIRECTORIES=" + filepath.Dir(notRepo)}, "--base", "HEAD"); r.code != 2 || r.stdout != "" {
 		t.Errorf("--base outside git: exit %d stdout %q", r.code, r.stdout)
+	}
+}
+
+func TestStrictReaders(t *testing.T) {
+	oldMod := writeModule(t, map[string]string{
+		"p/p.go": `package p
+
+type Event struct {
+	ID string ` + "`json:\"id\"`" + `
+}
+`,
+	})
+	newMod := writeModule(t, map[string]string{
+		"p/p.go": `package p
+
+type Event struct {
+	ID    string ` + "`json:\"id\"`" + `
+	Extra string ` + "`json:\"extra\"`" + `
+}
+`,
+	})
+
+	// Without --strict-readers, key-added is INFO and exits 0 under --fail-on warn
+	rDefault := runTool(t, "--old", oldMod, "--new", newMod, "--fail-on", "warn", "--format", "json")
+	if rDefault.code != 0 {
+		t.Fatalf("default: exit %d, want 0\n%s", rDefault.code, rDefault.stdout)
+	}
+	repDefault := jsonReport(t, rDefault)
+	if repDefault.Warnings != 0 || repDefault.Infos != 1 {
+		t.Errorf("default: warnings=%d infos=%d, want 0 warnings 1 info", repDefault.Warnings, repDefault.Infos)
+	}
+
+	// With --strict-readers, key-added is WARN and exits 1 under --fail-on warn
+	rStrict := runTool(t, "--old", oldMod, "--new", newMod, "--strict-readers", "--fail-on", "warn", "--format", "json")
+	if rStrict.code != 1 {
+		t.Fatalf("--strict-readers: exit %d, want 1\n%s", rStrict.code, rStrict.stdout)
+	}
+	repStrict := jsonReport(t, rStrict)
+	if repStrict.Warnings != 1 || repStrict.Infos != 0 {
+		t.Errorf("--strict-readers: warnings=%d infos=%d, want 1 warning 0 info", repStrict.Warnings, repStrict.Infos)
+	}
+	if len(repStrict.Findings) != 1 || repStrict.Findings[0].Severity != "warn" || repStrict.Findings[0].Change != "key-added" {
+		t.Errorf("unexpected findings: %+v", repStrict.Findings)
 	}
 }

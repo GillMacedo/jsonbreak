@@ -71,6 +71,7 @@ type options struct {
 	failOn         string
 	includeTypes   []string
 	keys           bool
+	strictReaders  bool
 }
 
 type stringList []string
@@ -97,11 +98,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&o.format, "format", "text", "output format: text or json")
 	fs.StringVar(&o.failOn, "fail-on", "break", "lowest severity that exits 1: break, warn or never")
 	fs.BoolVar(&o.keys, "keys", false, "print the JSON keys of each type in --new (or the current directory) and exit")
+	fs.BoolVar(&o.strictReaders, "strict-readers", false, "treat added keys as warnings for readers that call DisallowUnknownFields")
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: jsonbreak (--old DIR | --base GITREF) [--new DIR] [--pkg PATTERN]... [--type NAME]... [--all]\n")
 		fmt.Fprintf(stderr, "       jsonbreak --keys [--new DIR] [--pkg PATTERN]... [--type NAME]... [--all]\n")
-		fmt.Fprintf(stderr, "                 [--tags T,...] [--format text|json] [--fail-on break|warn|never]\n\n")
+		fmt.Fprintf(stderr, "                 [--tags T,...] [--format text|json] [--fail-on break|warn|never] [--strict-readers]\n\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -884,12 +886,13 @@ type Report struct {
 }
 
 type comparer struct {
-	old, new *side
-	rep      *Report
-	done     map[[2]*types.Struct]bool
-	seen     map[string]int // finding dedupe key -> index
-	opaque   map[string]bool
-	keys     int
+	old, new      *side
+	rep           *Report
+	done          map[[2]*types.Struct]bool
+	seen          map[string]int // finding dedupe key -> index
+	opaque        map[string]bool
+	strictReaders bool
+	keys          int
 }
 
 func (c *comparer) posOf(s *side, p token.Pos) string {
@@ -1036,7 +1039,7 @@ func compareSides(oldS, newS *side, o options) (*Report, error) {
 	if common == 0 {
 		return nil, distrust("no JSON type exists on both sides (old module %s, new module %s); are these revisions of the same module?", oldS.modPath, newS.modPath)
 	}
-	c := &comparer{old: oldS, new: newS, rep: rep, done: map[[2]*types.Struct]bool{}, seen: map[string]int{}, opaque: map[string]bool{}}
+	c := &comparer{old: oldS, new: newS, rep: rep, done: map[[2]*types.Struct]bool{}, seen: map[string]int{}, opaque: map[string]bool{}, strictReaders: o.strictReaders}
 	if oldS.modPath != newS.modPath {
 		c.add(Finding{Severity: sevInfo, Type: "module", Change: "module-path",
 			Message: fmt.Sprintf("module path changed from %s to %s; types were matched by their path inside the module", oldS.modPath, newS.modPath)}, "")
@@ -1261,7 +1264,11 @@ func (c *comparer) compareStruct(where, prefix string, os_, ns *types.Struct, se
 		if no := rel(c.new, f.origin); no != "" && oldEmb[no] != nil && !declares(oldEmb[no], f.key) {
 			owner = no
 		}
-		c.add(Finding{Severity: sevInfo, Type: owner, Key: prefix + f.key, Change: "key-added",
+		sev := sevInfo
+		if c.strictReaders {
+			sev = sevWarn
+		}
+		c.add(Finding{Severity: sev, Type: owner, Key: prefix + f.key, Change: "key-added",
 			Message: fmt.Sprintf("new key %q (field %s, %s)", f.key, fieldName(f), shapeOf(f.typ).describe()),
 			Pos:     c.posOf(c.new, f.pos)}, seenIn)
 	}
